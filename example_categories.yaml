@@ -1,0 +1,17 @@
+# block style categories
+food:
+  - eat
+  - food
+  - lunch
+  - dinner
+  - breakfast
+sport:
+  - football
+  - tennis
+  - gym
+  - bike
+work:
+  - meeting
+  - email
+  - todo
+  - pc work
