@@ -123,25 +123,24 @@ def get_date_range():
     today = datetime.today().date()
     current_year = today.year
 
-    start_in = input(f"Enter start date (DD-MM) or last X days [default {today - timedelta(days=7):%d-%m}]: ").strip()
+    start_in = input(
+        f"Enter start date (DD-MM) or last X days (incl. today) [default {today - timedelta(days=7):%d-%m}]: "
+    ).strip()
+
     if start_in.isdigit():
-        start_date = today - timedelta(days=int(start_in))
+        days = max(1, int(start_in))
+        # inclusive X-day window ending today
+        start_date = today - timedelta(days=days - 1)
         end_date = today
     else:
         end_in = input(f"Enter end date (DD-MM) [default {today:%d-%m}]: ").strip()
+        start_date = datetime.strptime(f"{start_in}-{current_year}", "%d-%m-%Y").date() if start_in else today - timedelta(days=7)
+        end_date   = datetime.strptime(f"{end_in}-{current_year}",   "%d-%m-%Y").date() if end_in   else today
 
-        if start_in:
-            start_date = datetime.strptime(f"{start_in}-{current_year}", "%d-%m-%Y").date()
-        else:
-            start_date = today - timedelta(days=7)
+    print("Range:", start_date, "to", end_date, "(inclusive)")
 
-        if end_in:
-            end_date = datetime.strptime(f"{end_in}-{current_year}", "%d-%m-%Y").date()
-        else:
-            end_date = today
-
-    return localizeTime(start_date, end_date + timedelta(days=1))  # NOTE: +1 day
-
+    # timeMax is exclusive → +1 day to include the last day fully
+    return localizeTime(start_date, end_date + timedelta(days=1))
 
 def localizeTime(start_date, end_date):
     tz = pytz.timezone('Europe/Berlin')
@@ -317,30 +316,36 @@ def event_start_dt(e, tz):
     iso = e["start"]["dateTime"].replace('Z', '+00:00')
     return datetime.fromisoformat(iso).astimezone(tz)
 
-
-def compute_day_stats(events, tz_name='Europe/Berlin'):
+def compute_day_stats(events, start_dt, end_dt, tz_name='Europe/Berlin'):
     tz = pytz.timezone(tz_name)
-    # unique dates that have >=1 event
+    start_day = start_dt.astimezone(tz).date()
+    end_day   = end_dt.astimezone(tz).date()      # exclusive
+
+    # exact set of valid days in the query window
+    valid_days = {start_day + timedelta(days=i)
+                  for i in range((end_day - start_day).days)}
+
     event_days = set()
     for e in events:
         dt = event_start_dt(e, tz)
-        if dt is not None:
-            event_days.add(dt.date())
+        if dt is None:
+            continue
+        d = dt.date()
+        if d in valid_days:           # clamp to window
+            event_days.add(d)
 
     total_event_days = len(event_days)
     working_days = sum(1 for d in event_days if d.weekday() < 5)
 
-    # weekday distribution (0=Mon ... 6=Sun)
     wd_counter = Counter(d.weekday() for d in event_days)
     names = ['Mondays','Tuesdays','Wednesdays','Thursdays','Fridays','Saturdays','Sundays']
     weekday_lines = {names[i]: wd_counter.get(i, 0) for i in range(7)}
-
     return total_event_days, working_days, weekday_lines
 
-
 # ---- call after you have `events_in_timeframe` ----
-total_days, working_days, weekday_lines = compute_day_stats(events_in_timeframe)
-
+total_days, working_days, weekday_lines = compute_day_stats(
+    events_in_timeframe, start_date, end_date
+)
 
 rows = [(name, weekday_lines[name]) for name in ['Mondays','Tuesdays','Wednesdays','Thursdays','Fridays','Saturdays','Sundays']]
 print(f"\nTotal Days: {total_days} | Working Days: {working_days} | Weekend Days: {total_days - working_days}\n")
