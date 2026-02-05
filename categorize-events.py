@@ -16,7 +16,7 @@ import yaml
 from datetime import datetime, date
 
 # If modifying the calendar, the required scopes are 'https://www.googleapis.com/auth/calendar'
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+SCOPES = ['https://www.googleapis.com/auth/calendar']
 UNCATEGORIZED_EVENTS = []
 
 # -------- config loaders --------
@@ -119,12 +119,22 @@ def get_user_selected_calendars():
 
 
 # Function to get the date range with default to last 7 days if no input is provided
+def _parse_day_month_or_full(s: str, default_year: int) -> date:
+    s = s.strip()
+    if not s:
+        return None
+    if s.count("-") == 1:
+        day_s, month_s = s.split("-")
+        return date(default_year, int(month_s), int(day_s))
+    # Allow full date like DD-MM-YYYY or YYYY-MM-DD
+    return _parse_date_any(s)
+
 def get_date_range():
     today = datetime.today().date()
     current_year = today.year
 
     start_in = input(
-        f"Enter start date (DD-MM) or last X days (incl. today) [default {today - timedelta(days=7):%d-%m}]: "
+        f"Enter start date (DD-MM or DD-MM-YYYY) or last X days (incl. today) [default {today - timedelta(days=7):%d-%m}]: "
     ).strip()
 
     if start_in.isdigit():
@@ -133,9 +143,10 @@ def get_date_range():
         start_date = today - timedelta(days=days - 1)
         end_date = today
     else:
-        end_in = input(f"Enter end date (DD-MM) [default {today:%d-%m}]: ").strip()
-        start_date = datetime.strptime(f"{start_in}-{current_year}", "%d-%m-%Y").date() if start_in else today - timedelta(days=7)
-        end_date   = datetime.strptime(f"{end_in}-{current_year}",   "%d-%m-%Y").date() if end_in   else today
+        end_in = input(f"Enter end date (DD-MM or DD-MM-YYYY) [default {today:%d-%m}]: ").strip()
+        start_date = _parse_day_month_or_full(start_in, current_year) if start_in else today - timedelta(days=7)
+        end_year_default = start_date.year if start_in else current_year
+        end_date = _parse_day_month_or_full(end_in, end_year_default) if end_in else today
 
     print("Range:", start_date, "to", end_date, "(inclusive)")
 
@@ -241,6 +252,56 @@ ALL_CATEGORIES = list(categories.keys()) + ["other"]
 _PALETTE = cm.get_cmap('tab20', len(ALL_CATEGORIES))
 COLOR_MAP = {cat: _PALETTE(i) for i, cat in enumerate(ALL_CATEGORIES)}
 
+# --- Google Calendar color IDs (strings "1".."11")
+# 1 Lavender, 2 Sage, 3 Grape, 4 Flamingo, 5 Banana, 6 Tangerine,
+# 7 Peacock, 8 Graphite, 9 Blueberry, 10 Basil, 11 Tomato
+DEFAULT_COLOR_ID = "10"  # Basil
+
+CATEGORY_COLOR_ID = {
+    "work": "7",            # Peacock
+    "uni": "5",             # Banana
+    "practical": "2",       # Sage
+    "food": "6",            # Tangerine
+    "time_together": "9",   # Blueberry
+    "sleep": "1",           # Lavender
+    "chill": "11",          # Tomato
+    "fun": "4",             # Flamingo
+    "sport": "3",           # Grape
+    "other": "8"            # Graphite
+}
+
+def color_id_for(category: str) -> str:
+    return CATEGORY_COLOR_ID.get(category, DEFAULT_COLOR_ID)
+
+
+def ensure_event_color(service, calendar_id: str, event: dict, category: str) -> bool:
+    """
+    Set Google Calendar event color based on category.
+    Returns True if an update was made, False if already correct or not applicable.
+    """
+    # Skip all-day or cancelled
+    if event.get("status") == "cancelled" or "dateTime" not in event.get("start", {}):
+        return False
+
+    desired = color_id_for(category)  # uses your CATEGORY_COLOR_ID map
+    current = event.get("colorId")
+
+    if current == desired:
+        return False  # no change needed
+
+    service.events().patch(
+        calendarId=calendar_id,
+        eventId=event["id"],
+        body={"colorId": desired},
+    ).execute()
+    return True
+
+def get_colorize_events():
+    env = os.getenv("COLORIZE_EVENTS")
+    if env is not None:
+        return env.strip().lower() in {"1", "true", "yes", "y"}
+    ans = input("Update Google Calendar event colors? [y/N]: ").strip().lower()
+    return ans in {"y", "yes"}
 
 # Function to calculate the duration of an event in minutes
 def calculate_duration(event):
@@ -251,10 +312,22 @@ def calculate_duration(event):
     return max(0, (e - s).total_seconds() / 60)
 
 
+COLORIZE_EVENTS = get_colorize_events()
+service = build_service() if COLORIZE_EVENTS else None
+
 for event in events_in_timeframe:
     category = categorize_event(event)
     duration = calculate_duration(event)
     category_times[category] += duration
+    # --- update event color in Google Calendar (optional) ---
+    if COLORIZE_EVENTS:
+        calendar_id = event.get("organizer", {}).get("email", "primary")
+        try:
+            changed = ensure_event_color(service, calendar_id, event, category)
+            if changed:
+                print(f"Updated color for: {event.get('summary','<no title>')} → {category}")
+        except Exception as e:
+            print(f"Failed to update color for {event.get('summary','<no title>')}: {e}")
 
 
 def reclassify_small_categories(category_times, total_time, threshold=0.02):
@@ -291,10 +364,41 @@ def minutes_to_hours(minutes):
 # Prepare labels with hours spent
 labels_with_hours = [f"{label} ({minutes_to_hours(time)} hrs)" for label, time in updated_category_times.items()]
 
-# Plotting the results with hours spent in the labels (TOTAL)
-plt.figure(figsize=(8, 6))
+# --- Google Calendar event colorId → hex (classic Google palette)
+GCAL_COLOR_HEX = {
+    "1":  "#a4bdfc",  # Lavender
+    "2":  "#7ae7bf",  # Sage
+    "3":  "#dbadff",  # Grape
+    "4":  "#ff887c",  # Flamingo
+    "5":  "#fbd75b",  # Banana
+    "6":  "#ffb878",  # Tangerine
+    "7":  "#46d6db",  # Peacock
+    "8":  "#e1e1e1",  # Graphite
+    "9":  "#5484ed",  # Blueberry
+    "10": "#51b749",  # Basil
+    "11": "#dc2127",  # Tomato
+}
+
+def hex_to_rgb_tuple(h: str):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i+2], 16)/255 for i in (0, 2, 4))
+
+# Rebuild COLOR_MAP to follow your CATEGORY_COLOR_ID / DEFAULT_COLOR_ID
+def color_for_category(cat: str):
+    cid = CATEGORY_COLOR_ID.get(cat, DEFAULT_COLOR_ID)
+    hexv = GCAL_COLOR_HEX.get(cid, GCAL_COLOR_HEX.get(DEFAULT_COLOR_ID))
+    return hex_to_rgb_tuple(hexv)
+
+ALL_CATEGORIES = list(categories.keys()) + ["other"]
+COLOR_MAP = {cat: color_for_category(cat) for cat in ALL_CATEGORIES}
 # keep category order stable based on ALL_CATEGORIES
 ordered_cats = [c for c in ALL_CATEGORIES if c in updated_category_times and updated_category_times[c] > 0]
+
+# Later for the pie:
+ordered_colors = [COLOR_MAP[c] for c in ordered_cats]
+
+# Plotting the results with hours spent in the labels (TOTAL)
+plt.figure(figsize=(8, 6))
 ordered_sizes = [updated_category_times[c] for c in ordered_cats]
 ordered_labels = [f"{c} ({minutes_to_hours(updated_category_times[c])} hrs)" for c in ordered_cats]
 ordered_colors = [COLOR_MAP[c] for c in ordered_cats]
@@ -463,4 +567,3 @@ if UNCATEGORIZED_EVENTS:
         if s not in seen:           # dedupe summaries; remove if you want all
             seen.add(s)
             print("-", s)
-
