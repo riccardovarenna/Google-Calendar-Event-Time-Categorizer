@@ -129,6 +129,16 @@ def _parse_day_month_or_full(s: str, default_year: int) -> date:
     # Allow full date like DD-MM-YYYY or YYYY-MM-DD
     return _parse_date_any(s)
 
+def _parse_bool_flag(s: str):
+    s = s.strip().lower()
+    if not s:
+        return None
+    if s in {"y", "yes", "true", "1", "on"}:
+        return True
+    if s in {"n", "no", "false", "0", "off"}:
+        return False
+    return None
+
 def get_date_range():
     today = datetime.today().date()
     current_year = today.year
@@ -142,16 +152,23 @@ def get_date_range():
         # inclusive X-day window ending today
         start_date = today - timedelta(days=days - 1)
         end_date = today
+        colorize_flag = None
     else:
-        end_in = input(f"Enter end date (DD-MM or DD-MM-YYYY) [default {today:%d-%m}]: ").strip()
+        end_in = input(
+            f"Enter end date (DD-MM or DD-MM-YYYY) and optional colorize flag [y/N] "
+            f"(e.g. 05-02-2026 y) [default {today:%d-%m}]: "
+        ).strip()
+        parts = end_in.split()
+        end_date_part = parts[0] if parts else ""
+        colorize_flag = _parse_bool_flag(parts[1]) if len(parts) > 1 else None
         start_date = _parse_day_month_or_full(start_in, current_year) if start_in else today - timedelta(days=7)
         end_year_default = start_date.year if start_in else current_year
-        end_date = _parse_day_month_or_full(end_in, end_year_default) if end_in else today
+        end_date = _parse_day_month_or_full(end_date_part, end_year_default) if end_date_part else today
 
     print("Range:", start_date, "to", end_date, "(inclusive)")
 
     # timeMax is exclusive → +1 day to include the last day fully
-    return localizeTime(start_date, end_date + timedelta(days=1))
+    return localizeTime(start_date, end_date + timedelta(days=1)), colorize_flag
 
 def localizeTime(start_date, end_date):
     tz = pytz.timezone('Europe/Berlin')
@@ -193,7 +210,7 @@ def remove_all_day(events):
 
 
 # Get the date range from the user
-start_date, end_date = get_date_range()
+(start_date, end_date), colorize_flag = get_date_range()
 
 # Fetch the events from Google Calendar in the given date range
 events_from_calendar = get_events_in_date_range(start_date, end_date)
@@ -296,13 +313,6 @@ def ensure_event_color(service, calendar_id: str, event: dict, category: str) ->
     ).execute()
     return True
 
-def get_colorize_events():
-    env = os.getenv("COLORIZE_EVENTS")
-    if env is not None:
-        return env.strip().lower() in {"1", "true", "yes", "y"}
-    ans = input("Update Google Calendar event colors? [y/N]: ").strip().lower()
-    return ans in {"y", "yes"}
-
 # Function to calculate the duration of an event in minutes
 def calculate_duration(event):
     tz = pytz.timezone('Europe/Berlin')
@@ -312,7 +322,13 @@ def calculate_duration(event):
     return max(0, (e - s).total_seconds() / 60)
 
 
-COLORIZE_EVENTS = get_colorize_events()
+def _env_colorize_default():
+    env = os.getenv("COLORIZE_EVENTS")
+    if env is None:
+        return False
+    return env.strip().lower() in {"1", "true", "yes", "y"}
+
+COLORIZE_EVENTS = colorize_flag if colorize_flag is not None else _env_colorize_default()
 service = build_service() if COLORIZE_EVENTS else None
 
 for event in events_in_timeframe:
