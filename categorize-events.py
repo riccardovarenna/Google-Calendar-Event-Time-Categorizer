@@ -1,5 +1,6 @@
 import re
 import os
+import json
 import pickle
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -17,7 +18,9 @@ import yaml
 from datetime import datetime, date
 
 # If modifying the calendar, the required scopes are 'https://www.googleapis.com/auth/calendar'
-SCOPES = ['https://www.googleapis.com/auth/calendar']
+SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/spreadsheets']
+with open('credentials.json', 'r') as _f:
+    SHEET_ID = json.load(_f)['sheet_id']
 UNCATEGORIZED_EVENTS = []
 
 # -------- config loaders --------
@@ -574,6 +577,76 @@ def plot_pie_from_minutes_map(title, cat_min_map):
 # New pies (averages):
 plot_pie_from_minutes_map(f'Average per Working Day (n={n_work})', avg_work)
 plot_pie_from_minutes_map(f'Average per Weekend Day (n={n_weekend})', avg_weekend)
+
+def write_to_sheet(per_day, all_categories):
+    creds = authenticate_google_account()
+    sheets_service = build('sheets', 'v4', credentials=creds)
+    sheet = sheets_service.spreadsheets()
+
+    # Read all existing data
+    result = sheet.values().get(spreadsheetId=SHEET_ID, range='Sheet1').execute()
+    existing_rows = result.get('values', [])
+
+    # Determine column order: preserve existing header, append any new categories
+    if existing_rows and existing_rows[0] and existing_rows[0][0] == 'Date':
+        existing_header = existing_rows[0]
+        new_cats = [c for c in all_categories if c not in existing_header]
+        header = existing_header + new_cats
+    else:
+        header = ['Date'] + list(all_categories)
+        existing_rows = []
+
+    cat_columns = header[1:]
+
+    # Write header (in case it's new or gained columns)
+    sheet.values().update(
+        spreadsheetId=SHEET_ID,
+        range='Sheet1!A1',
+        valueInputOption='RAW',
+        body={'values': [header]}
+    ).execute()
+
+    # Build date → row number map (1-based; row 1 is the header)
+    date_to_row = {}
+    for i, row in enumerate(existing_rows[1:], start=2):
+        if row and row[0]:
+            date_to_row[row[0]] = i
+
+    batch_updates = []
+    appends = []
+
+    for day in sorted(per_day.keys()):
+        date_str = day.strftime('%Y-%m-%d')
+        cat_minutes = per_day[day]
+        row_values = [date_str] + [round(cat_minutes.get(cat, 0) / 60, 2) for cat in cat_columns]
+
+        if date_str in date_to_row:
+            batch_updates.append({
+                'range': f'Sheet1!A{date_to_row[date_str]}',
+                'values': [row_values]
+            })
+        else:
+            appends.append(row_values)
+
+    if batch_updates:
+        sheet.values().batchUpdate(
+            spreadsheetId=SHEET_ID,
+            body={'valueInputOption': 'RAW', 'data': batch_updates}
+        ).execute()
+
+    if appends:
+        sheet.values().append(
+            spreadsheetId=SHEET_ID,
+            range='Sheet1!A1',
+            valueInputOption='RAW',
+            insertDataOption='INSERT_ROWS',
+            body={'values': appends}
+        ).execute()
+
+    print(f"\nSheet updated: {len(batch_updates)} row(s) updated, {len(appends)} row(s) added.")
+
+
+write_to_sheet(per_day, ALL_CATEGORIES)
 
 # log all events that didn't fit a category and got put into 'other'
 if UNCATEGORIZED_EVENTS:
