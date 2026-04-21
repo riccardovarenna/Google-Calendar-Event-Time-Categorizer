@@ -602,7 +602,7 @@ def write_to_sheet(per_day, all_categories):
     sheet.values().update(
         spreadsheetId=SHEET_ID,
         range='Sheet1!A1',
-        valueInputOption='RAW',
+        valueInputOption='USER_ENTERED',
         body={'values': [header]}
     ).execute()
 
@@ -622,7 +622,7 @@ def write_to_sheet(per_day, all_categories):
 
         if date_str in date_to_row:
             batch_updates.append({
-                'range': f'Sheet1!A{date_to_row[date_str]}',
+                'range': f'DataDay!A{date_to_row[date_str]}',
                 'values': [row_values]
             })
         else:
@@ -638,7 +638,7 @@ def write_to_sheet(per_day, all_categories):
         sheet.values().append(
             spreadsheetId=SHEET_ID,
             range='Sheet1!A1',
-            valueInputOption='RAW',
+            valueInputOption='USER_ENTERED',
             insertDataOption='INSERT_ROWS',
             body={'values': appends}
         ).execute()
