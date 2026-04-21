@@ -584,7 +584,7 @@ def write_to_sheet(per_day, all_categories):
     sheet = sheets_service.spreadsheets()
 
     # Read all existing data
-    result = sheet.values().get(spreadsheetId=SHEET_ID, range='Sheet1').execute()
+    result = sheet.values().get(spreadsheetId=SHEET_ID, range='DataDay').execute()
     existing_rows = result.get('values', [])
 
     # Determine column order: preserve existing header, append any new categories
@@ -601,7 +601,7 @@ def write_to_sheet(per_day, all_categories):
     # Write header (in case it's new or gained columns)
     sheet.values().update(
         spreadsheetId=SHEET_ID,
-        range='Sheet1!A1',
+        range='DataDay!A1',
         valueInputOption='USER_ENTERED',
         body={'values': [header]}
     ).execute()
@@ -637,7 +637,7 @@ def write_to_sheet(per_day, all_categories):
     if appends:
         sheet.values().append(
             spreadsheetId=SHEET_ID,
-            range='Sheet1!A1',
+            range='DataDay!A1',
             valueInputOption='USER_ENTERED',
             insertDataOption='INSERT_ROWS',
             body={'values': appends}
