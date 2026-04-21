@@ -1,3 +1,4 @@
+import re
 import os
 import pickle
 from google.auth.transport.requests import Request
@@ -258,7 +259,7 @@ def categorize_event(event):
     summary = (event.get("summary") or "").lower()
     for category, keywords in categories.items():
         for keyword in keywords:
-            if keyword.lower() in summary:
+            if re.search(r'\b' + re.escape(keyword.lower()) + r'\b', summary):
                 return category
     # collect instead of printing
     UNCATEGORIZED_EVENTS.append(event)
