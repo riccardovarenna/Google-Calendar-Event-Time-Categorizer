@@ -11,7 +11,7 @@ from datetime import date
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import pytz
-import matplotlib.cm as cm
+
 from collections import Counter
 from collections import defaultdict
 from tabulate import tabulate
@@ -215,6 +215,19 @@ def remove_all_day(events):
     return [e for e in events if "dateTime" in e.get("start", {})]
 
 
+def remove_long_events(events):
+    result = []
+    for e in events:
+        s_iso = e.get("start", {}).get("dateTime")
+        e_iso = e.get("end", {}).get("dateTime", s_iso)
+        if s_iso and e_iso:
+            s = datetime.fromisoformat(s_iso.replace('Z', '+00:00'))
+            t = datetime.fromisoformat(e_iso.replace('Z', '+00:00'))
+            if (t - s).total_seconds() < 86400:
+                result.append(e)
+    return result
+
+
 # Get the date range from the user
 (start_date, end_date), colorize_flag = get_date_range()
 
@@ -223,6 +236,7 @@ events_from_calendar = get_events_in_date_range(start_date, end_date)
 
 # Now you can proceed with filtering, categorization, and plotting as before
 events_in_timeframe = remove_all_day(events_from_calendar)
+events_in_timeframe = remove_long_events(events_in_timeframe)
 
 # Now you can proceed with the categorization and plotting as before
 category_times = {category: 0 for category in categories}
@@ -272,8 +286,6 @@ def categorize_event(event):
 
 
 ALL_CATEGORIES = list(categories.keys()) + ["other"]
-_PALETTE = cm.get_cmap('tab20', len(ALL_CATEGORIES))
-COLOR_MAP = {cat: _PALETTE(i) for i, cat in enumerate(ALL_CATEGORIES)}
 
 # --- Google Calendar color IDs (strings "1".."11")
 # 1 Lavender, 2 Sage, 3 Grape, 4 Flamingo, 5 Banana, 6 Tangerine,
@@ -319,20 +331,22 @@ def ensure_event_color(service, calendar_id: str, event: dict, category: str) ->
     ).execute()
     return True
 
-# Function to calculate the duration of an event in minutes
+def event_local_start_end(e, tz):
+    s = datetime.fromisoformat(e["start"]["dateTime"].replace('Z', '+00:00')).astimezone(tz)
+    e_iso = e["end"].get("dateTime", e["start"]["dateTime"])
+    t = datetime.fromisoformat(e_iso.replace('Z', '+00:00')).astimezone(tz)
+    return s, t
+
+
 def calculate_duration(event):
     tz = pytz.timezone('Europe/Berlin')
-    s = datetime.fromisoformat(event["start"]["dateTime"].replace('Z', '+00:00')).astimezone(tz)
-    e_iso = event["end"].get("dateTime", event["start"]["dateTime"])
-    e = datetime.fromisoformat(e_iso.replace('Z', '+00:00')).astimezone(tz)
-    return max(0, (e - s).total_seconds() / 60)
+    s, e = event_local_start_end(event, tz)
+    return (e - s).total_seconds() / 60
 
 
 def _env_colorize_default():
     env = os.getenv("COLORIZE_EVENTS")
-    if env is None:
-        return False
-    return env.strip().lower() in {"1", "true", "yes", "y"}
+    return False if env is None else (_parse_bool_flag(env) or False)
 
 COLORIZE_EVENTS = colorize_flag if colorize_flag is not None else _env_colorize_default()
 service = build_service() if COLORIZE_EVENTS else None
@@ -373,18 +387,10 @@ def reclassify_small_categories(category_times, total_time, threshold=0.02):
 total_time = sum(category_times.values())  # Total time spent
 updated_category_times = reclassify_small_categories(category_times, total_time)
 
-# Plotting the results
-labels = list(updated_category_times.keys())
-sizes = list(updated_category_times.values())
-
-
 # Convert minutes to hours for display
 def minutes_to_hours(minutes):
     return round(minutes / 60, 2)
 
-
-# Prepare labels with hours spent
-labels_with_hours = [f"{label} ({minutes_to_hours(time)} hrs)" for label, time in updated_category_times.items()]
 
 # --- Google Calendar event colorId → hex (classic Google palette)
 GCAL_COLOR_HEX = {
@@ -413,34 +419,21 @@ def color_for_category(cat: str):
 
 ALL_CATEGORIES = list(categories.keys()) + ["other"]
 COLOR_MAP = {cat: color_for_category(cat) for cat in ALL_CATEGORIES}
-# keep category order stable based on ALL_CATEGORIES
 ordered_cats = [c for c in ALL_CATEGORIES if c in updated_category_times and updated_category_times[c] > 0]
 
-# Later for the pie:
-ordered_colors = [COLOR_MAP[c] for c in ordered_cats]
 
-# Plotting the results with hours spent in the labels (TOTAL)
-plt.figure(figsize=(8, 6))
-ordered_sizes = [updated_category_times[c] for c in ordered_cats]
-ordered_labels = [f"{c} ({minutes_to_hours(updated_category_times[c])} hrs)" for c in ordered_cats]
-ordered_colors = [COLOR_MAP[c] for c in ordered_cats]
+def plot_total_pie():
+    sizes = [updated_category_times[c] for c in ordered_cats]
+    labels = [f"{c} ({minutes_to_hours(updated_category_times[c])} hrs)" for c in ordered_cats]
+    colors = [COLOR_MAP[c] for c in ordered_cats]
+    plt.figure(figsize=(8, 6))
+    plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+    plt.title('Time Distribution by Activity Category')
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    plt.figtext(0.5, 0.02, f"Generated at {timestamp}", ha="center", fontsize=9, color="gray")
+    plt.axis('equal')
+    plt.show()
 
-plt.pie(ordered_sizes, labels=ordered_labels, colors=ordered_colors, autopct='%1.1f%%', startangle=90)
-plt.title('Time Distribution by Activity Category')
-
-# Add timestamp label below chart
-timestamp = datetime.now().strftime("%H:%M:%S")
-plt.figtext(0.5, 0.02, f"Generated at {timestamp}", ha="center", fontsize=9, color="gray")
-
-plt.axis('equal')
-plt.show()
-
-
-def event_start_dt(e, tz):
-    if "dateTime" not in e.get("start", {}):  # skip all-day
-        return None
-    iso = e["start"]["dateTime"].replace('Z', '+00:00')
-    return datetime.fromisoformat(iso).astimezone(tz)
 
 def compute_day_stats(events, start_dt, end_dt, tz_name='Europe/Berlin'):
     tz = pytz.timezone(tz_name)
@@ -453,7 +446,7 @@ def compute_day_stats(events, start_dt, end_dt, tz_name='Europe/Berlin'):
 
     event_days = set()
     for e in events:
-        dt = event_start_dt(e, tz)
+        dt = event_start_dt_local(e, tz)
         if dt is None:
             continue
         d = dt.date()
@@ -494,16 +487,9 @@ print(f"Events fetched: {len(keep_timed_and_active(events_from_calendar))}")
 print(f"After blacklist: {len(keep_timed_and_active(events_in_timeframe))}")
 
 
-def event_local_start_end(e, tz):
-    s = datetime.fromisoformat(e["start"]["dateTime"].replace('Z', '+00:00')).astimezone(tz)
-    e_iso = e["end"].get("dateTime", e["start"]["dateTime"])
-    t = datetime.fromisoformat(e_iso.replace('Z', '+00:00')).astimezone(tz)
-    return s, t
-
-
 def minutes(e, tz):
     s, t = event_local_start_end(e, tz)
-    return max(0, (t - s).total_seconds() / 60), s.date()  # duration, start-date
+    return (t - s).total_seconds() / 60, s.date()
 
 
 def per_day_category_minutes(events, tz_name='Europe/Berlin'):
@@ -576,10 +562,6 @@ def plot_pie_from_minutes_map(title, cat_min_map):
     plt.show()
 
 
-# New pies (averages):
-plot_pie_from_minutes_map(f'Average per Working Day (n={n_work})', avg_work)
-plot_pie_from_minutes_map(f'Average per Weekend Day (n={n_weekend})', avg_weekend)
-
 def write_to_sheet(per_day, all_categories):
     creds = authenticate_google_account()
     sheets_service = build('sheets', 'v4', credentials=creds)
@@ -650,12 +632,15 @@ def write_to_sheet(per_day, all_categories):
 
 write_to_sheet(per_day, ALL_CATEGORIES)
 
-# log all events that didn't fit a category and got put into 'other'
 if UNCATEGORIZED_EVENTS:
-    print("\nUncategorized events:")
+    print("\nUncategorized events (fix these before pie charts will show):")
     seen = set()
     for e in UNCATEGORIZED_EVENTS:
         s = e.get("summary", "<no summary>")
-        if s not in seen:           # dedupe summaries; remove if you want all
+        if s not in seen:
             seen.add(s)
             print("-", s)
+else:
+    plot_total_pie()
+    plot_pie_from_minutes_map(f'Average per Working Day (n={n_work})', avg_work)
+    plot_pie_from_minutes_map(f'Average per Weekend Day (n={n_weekend})', avg_weekend)
