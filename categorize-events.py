@@ -631,7 +631,7 @@ def write_to_sheet(per_day, all_categories):
     if batch_updates:
         sheet.values().batchUpdate(
             spreadsheetId=SHEET_ID,
-            body={'valueInputOption': 'RAW', 'data': batch_updates}
+            body={'valueInputOption': 'USER_ENTERED', 'data': batch_updates}
         ).execute()
 
     if appends:
