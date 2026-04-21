@@ -630,10 +630,8 @@ def write_to_sheet(per_day, all_categories):
     print(f"\nSheet updated: {len(batch_updates)} row(s) updated, {len(appends)} row(s) added.")
 
 
-write_to_sheet(per_day, ALL_CATEGORIES)
-
 if UNCATEGORIZED_EVENTS:
-    print("\nUncategorized events (fix these before pie charts will show):")
+    print("\nUncategorized events (fix these before the sheet is updated or pie charts show):")
     seen = set()
     for e in UNCATEGORIZED_EVENTS:
         s = e.get("summary", "<no summary>")
@@ -641,6 +639,7 @@ if UNCATEGORIZED_EVENTS:
             seen.add(s)
             print("-", s)
 else:
+    write_to_sheet(per_day, ALL_CATEGORIES)
     plot_total_pie()
     plot_pie_from_minutes_map(f'Average per Working Day (n={n_work})', avg_work)
     plot_pie_from_minutes_map(f'Average per Weekend Day (n={n_weekend})', avg_weekend)

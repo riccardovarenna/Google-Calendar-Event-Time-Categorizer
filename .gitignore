@@ -4,7 +4,7 @@ token.json
 *.pickle
 missing-days.py
 
-categories.yaml
+categories*
 blacklist_dates
 
 .env
