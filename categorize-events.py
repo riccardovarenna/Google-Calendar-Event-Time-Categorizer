@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings('ignore', 'urllib3 v2 only supports OpenSSL')
 import re
 import os
 import json
